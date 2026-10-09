@@ -760,7 +760,7 @@
     </div>
     <div class="card-body">
       <p style="font-size:0.9rem; color:var(--text-muted); margin-top:0;">
-        GitHub permite 60 peticiones/hora a usuarios anónimos. Si has alcanzado el límite, puedes añadir un Personal Access Token (con permisos públicos de lectura) para obtener 5.000 peticiones/hora. Se guarda solo en tu navegador (<code>localStorage</code>).
+        GitHub permite 60 peticiones/hora a usuarios anónimos. Si has alcanzado el límite, puedes añadir un Personal Access Token (con permisos públicos de lectura) para obtener 5.000 peticiones/hora. Se guarda solo en tu navegador (<code>localStorage</code>) o se pasa por la URL como <code>?token=...</code>.
       </p>
       <input type="password" id="input-token-val" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" style="width:100%; padding:0.6rem; border:1px solid var(--border); border-radius:6px; margin-bottom:1rem; font-family:var(--font-mono);">
       <div style="display:flex; justify-content:space-between;">
@@ -796,6 +796,17 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/markdown.min.js"></script>
 
 <script>
+  // Función auxiliar segura para localStorage (puede fallar en iframes sandbox)
+  function safeStorageGet(key) {
+    try { return localStorage.getItem(key) || ""; } catch (e) { return ""; }
+  }
+  function safeStorageSet(key, val) {
+    try { localStorage.setItem(key, val); } catch (e) {}
+  }
+  function safeStorageRemove(key) {
+    try { localStorage.removeItem(key); } catch (e) {}
+  }
+
   const state = {
     owner: "Brokenstarck",
     repo: "Brokenstarck.github.io",
@@ -806,7 +817,7 @@
     currentFile: null,
     activeMode: "code",
     themeDark: true,
-    token: localStorage.getItem("gh_token") || "",
+    token: safeStorageGet("gh_token"),
     currentHtmlTarget: null
   };
 
@@ -899,6 +910,22 @@
     state.owner = detectedOwner;
     state.repo = detectedRepo;
     dom.inputRepo.value = state.owner + "/" + state.repo;
+
+    // ── Prioridad del token ──
+    // 1) ?token=... en la URL (para el iframe de Google Sites)
+    // 2) localStorage (cuando el visor se abre como página propia)
+    const urlToken = params.get("token");
+    if (urlToken && urlToken.trim()) {
+      state.token = urlToken.trim();
+      // Intentamos guardarlo por si el localStorage está disponible
+      safeStorageSet("gh_token", state.token);
+      // Limpiamos el token de la barra de direcciones (por seguridad)
+      try {
+        const cleanUrl = new URL(window.location);
+        cleanUrl.searchParams.delete("token");
+        window.history.replaceState({}, "", cleanUrl);
+      } catch (e) {}
+    }
 
     if (state.token) {
       document.getElementById("input-token-val").value = state.token;
@@ -1216,12 +1243,16 @@
 
       displayCode(text, filePath, fileSize || text.length);
       
-      var newUrl = new URL(window.location);
-      newUrl.searchParams.set("user", state.owner);
-      newUrl.searchParams.set("repo", state.repo);
-      newUrl.searchParams.set("branch", state.branch);
-      newUrl.searchParams.set("f", filePath);
-      window.history.replaceState({}, "", newUrl);
+      // Actualizamos la URL solo si NO estamos en un iframe cross-origin (Google Sites)
+      // En ese caso history.replaceState lanzaría una excepción de seguridad.
+      try {
+        var newUrl = new URL(window.location);
+        newUrl.searchParams.set("user", state.owner);
+        newUrl.searchParams.set("repo", state.repo);
+        newUrl.searchParams.set("branch", state.branch);
+        newUrl.searchParams.set("f", filePath);
+        window.history.replaceState({}, "", newUrl);
+      } catch (e) {}
 
       if (state.activeMode === "preview" && filePath.endsWith(".html")) {
         launchExecution(filePath);
@@ -1593,8 +1624,8 @@
   document.getElementById("btn-save-token").onclick = function() {
     var val = document.getElementById("input-token-val").value.trim();
     state.token = val;
-    if (val) localStorage.setItem("gh_token", val);
-    else localStorage.removeItem("gh_token");
+    if (val) safeStorageSet("gh_token", val);
+    else safeStorageRemove("gh_token");
     toggleModal("modal-token", false);
     showToast("Token de GitHub guardado");
     loadTree();
@@ -1603,7 +1634,7 @@
   document.getElementById("btn-clear-token").onclick = function() {
     document.getElementById("input-token-val").value = "";
     state.token = "";
-    localStorage.removeItem("gh_token");
+    safeStorageRemove("gh_token");
     toggleModal("modal-token", false);
     showToast("Token eliminado");
   };
